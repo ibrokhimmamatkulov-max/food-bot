@@ -1,79 +1,84 @@
-require('dotenv').config();
-const { Telegraf, Markup } = require('telegraf');
-const express = require('express');
-const path = require('path');
-const fs = require('fs');
+const { Telegraf, Markup } = require("telegraf");
+const express = require("express");
+const path = require("path");
+require("dotenv").config();
 
-const bot = new Telegraf(process.env.BOT_TOKEN);
+const bot = new Telegraf("8392926117:AAE3cBrj4eEm7Zvo3OVqFbEc43Mkbx_EOPE");
 const app = express();
+
+app.use(express.static(path.join(__dirname, "public")));
 const PORT = process.env.PORT || 3000;
 
-// Загружаем меню
-const menu = JSON.parse(fs.readFileSync(path.join(__dirname, 'menu.json'), 'utf-8'));
-
-// Хранилище заказов
-const userOrders = {};
-
-// Кнопка "Меню" рядом с вводом текста
-bot.telegram.setMyCommands([{ command: 'menu', description: 'Открыть меню' }]);
-
-// Обработка команды /menu
-bot.command('menu', (ctx) => {
-  ctx.reply('Выберите действие:', Markup.inlineKeyboard([
-    [Markup.button.webApp('Открыть меню', process.env.MINIAPP_URL)],
-    [Markup.button.callback('Заказать', 'order')]
-  ]));
-});
-
-// Обработка inline кнопки "Заказать"
-bot.action('order', async (ctx) => {
-  await ctx.answerCbQuery();
-  ctx.session = {}; // сбросим сессию
-  ctx.session.step = 'pavilion';
-  await ctx.reply('Введите номер павильона:');
-});
-
-// Обработка сообщений после "Заказать"
-bot.on('text', async (ctx) => {
-  if (!ctx.session) ctx.session = {};
-
-  if (ctx.session.step === 'pavilion') {
-    ctx.session.pavilion = ctx.message.text;
-    ctx.session.step = 'phone';
-    return ctx.reply('Введите номер телефона:');
-  }
-
-  if (ctx.session.step === 'phone') {
-    ctx.session.phone = ctx.message.text;
-    ctx.session.step = null;
-
-    // Отправка админу
-    const orderMsg = `📦 Новый заказ
-
-Павильон: ${ctx.session.pavilion}
-Телефон: ${ctx.session.phone}`;
-    await bot.telegram.sendMessage(process.env.ADMIN_ID, orderMsg);
-
-    return ctx.reply('✅ Ваш заказ принят!');
-  }
-});
-
-// Обработка данных из mini app
-bot.on('web_app_data', async (ctx) => {
-  const data = JSON.parse(ctx.webAppData.data);
-  ctx.session = { step: 'pavilion', order: data };
-  await ctx.reply('Введите номер павильона:');
-});
-
-// Запуск express
-app.use(express.static(path.join(__dirname, 'public')));
-
-app.get('/', (req, res) => {
-  res.send('Food Bot is running');
+app.get("/", (req, res) => {
+  res.send("Bot is running 🚀");
 });
 
 app.listen(PORT, () => {
   console.log(`🌐 Server running on port ${PORT}`);
 });
 
-bot.launch();
+// === Хранилище заказов во временной памяти ===
+const orders = {};
+const ADMIN_ID = "5568760903";
+
+// === Кнопка меню рядом с вводом текста ===
+bot.telegram.setMyCommands([
+  { command: "menu", description: "📋 Открыть меню" },
+]);
+
+// === Команда меню ===
+bot.command("menu", (ctx) => {
+  ctx.reply(
+    "📋 Добро пожаловать! Выберите действие:",
+    Markup.inlineKeyboard([
+      [Markup.button.webApp("🍔 Открыть меню", "https://food-bot-miniapp.onrender.com")],
+      [Markup.button.callback("🛒 Заказать", "make_order")],
+    ])
+  );
+});
+
+// === Кнопка в чате "Заказать" ===
+bot.action("make_order", (ctx) => {
+  const userId = ctx.from.id;
+  orders[userId] = { step: "pavilion" };
+  ctx.reply("🏢 Введите номер павильона:");
+});
+
+// === Обработка сообщений пользователя ===
+bot.on("text", async (ctx) => {
+  const userId = ctx.from.id;
+
+  if (orders[userId]) {
+    const step = orders[userId].step;
+
+    if (step === "pavilion") {
+      orders[userId].pavilion = ctx.message.text;
+      orders[userId].step = "phone";
+      return ctx.reply("📱 Теперь введите ваш номер телефона:");
+    }
+
+    if (step === "phone") {
+      orders[userId].phone = ctx.message.text;
+      orders[userId].step = "done";
+
+      // Отправляем заказ админу
+      await ctx.telegram.sendMessage(
+        ADMIN_ID,
+        `📦 Новый заказ!\n\n👤 Клиент: ${ctx.from.first_name}\n🏢 Павильон: ${orders[userId].pavilion}\n📱 Телефон: ${orders[userId].phone}`
+      );
+
+      await ctx.reply("✅ Спасибо! Ваш заказ отправлен администратору.");
+      delete orders[userId];
+      return;
+    }
+  }
+});
+
+// === Запуск бота ===
+if (process.env.RENDER_EXTERNAL_URL) {
+  bot.telegram.setWebhook(`${process.env.RENDER_EXTERNAL_URL}/bot`);
+  app.use(bot.webhookCallback("/bot"));
+} else {
+  bot.launch();
+  console.log("🤖 Bot started with long polling");
+}
