@@ -1,96 +1,112 @@
 require('dotenv').config();
-const { Telegraf, Markup } = require('telegraf');
+const { Telegraf, Markup, session } = require('telegraf');
 const express = require('express');
-const bodyParser = require('body-parser');
 const fs = require('fs');
-const path = require('path');
-
-const bot = new Telegraf(process.env.BOT_TOKEN);
-const ADMIN_ID = process.env.ADMIN_ID;
-
-const app = express();
-app.use(bodyParser.json());
-app.use(express.static(path.join(__dirname, 'public')));
 
 // Загружаем меню
-let menu = JSON.parse(fs.readFileSync(path.join(__dirname, 'menu.json'), 'utf-8'));
+const menu = JSON.parse(fs.readFileSync('./menu.json', 'utf8'));
 
-// Команда /start
+// Создаем бота
+const bot = new Telegraf(process.env.BOT_TOKEN);
+
+// Сессии для хранения состояния
+bot.use(session());
+
+// Стартовое сообщение
 bot.start((ctx) => {
   ctx.reply(
-    'Добро пожаловать! 👋\nНажмите кнопку ниже, чтобы открыть меню.',
-    Markup.keyboard([['📖 Меню']]).resize()
+    'Добро пожаловать! Используйте кнопку "Меню", чтобы открыть список блюд.',
+    Markup.keyboard([['📋 Меню', '🛒 Корзина']]).resize()
   );
 });
 
-// Кнопка "📖 Меню"
-bot.hears('📖 Меню', (ctx) => {
-  ctx.reply(
-    'Откройте меню:',
-    Markup.inlineKeyboard([
-      Markup.button.webApp('Открыть меню', process.env.MINIAPP_URL)
-    ])
-  );
+// Открыть меню
+bot.hears('📋 Меню', (ctx) => {
+  const buttons = menu.map((item) => [Markup.button.callback(item.title, `add_${item.id}`)]);
+  ctx.reply('Выберите блюдо:', Markup.inlineKeyboard(buttons));
 });
 
-// Обработка данных из мини-приложения
-bot.on('web_app_data', async (ctx) => {
-  try {
-    const data = JSON.parse(ctx.message.web_app_data.data);
-
-    if (!datadata.cart.length === 0) {
-      return ctx.reply('❌ Корзина пуста.');
+// Добавление в корзину
+menu.forEach((item) => {
+  bot.action(`add_${item.id}`, (ctx) => {
+    if (!ctx.session.cart) ctx.session.cart = [];
+    const existing = ctx.session.cart.find((i) => i.id === item.id);
+    if (existing) {
+      existing.quantity += 1;
+    } else {
+      ctx.session.cart.push({ ...item, quantity: 1 });
     }
-
-    // Сохраняем заказ во временное хранилище (memory)
-    ctx.session = { cart: data.cart };
-    await ctx.reply('📝 Укажите номер павильона:');
-    ctx.session.step = 'pavilion';
-  } catch (e) {
-    console.error(e);
-    ctx.reply('Ошибка при обработке данных заказа.');
-  }
+    ctx.answerCbQuery(`${item.title} добавлен в корзину`);
+  });
 });
 
-// Логика пошагового ввода
-bot.on('text', async (ctx) => {
-  if (!ctx.session || !ctx.session.step) return;
-
-  if (ctx.session.step === 'pavilion') {
-    ctx.session.pavilion = ctx.message.text;
-    ctx.session.step = 'phone';
-    return ctx.reply('📞 Теперь введите номер телефона:');
+// Просмотр корзины
+bot.hears('🛒 Корзина', (ctx) => {
+  const cart = ctx.session.cart || [];
+  if (cart.length === 0) {
+    return ctx.reply('Ваша корзина пуста');
   }
+  let text = '🛒 Ваша корзина:\n\n';
+  cart.forEach((item, i) => {
+    text += ${i + 1}. ${item.title} × ${item.quantity}\n;
+  });
+  ctx.reply(text, Markup.inlineKeyboard([[Markup.button.callback('✅ Оформить заказ', 'checkout')]]));
+});
 
-  if (ctx.session.step === 'phone') {
+// Оформление заказа
+bot.action('checkout', (ctx) => {
+  ctx.session.state = 'ask_pavilion';
+  ctx.reply('Введите номер павильона:');
+});
+
+// Получение номера павильона
+bot.on('text', (ctx, next) => {
+  if (ctx.session.state === 'ask_pavilion') {
+    ctx.session.pavilion = ctx.message.text;
+    ctx.session.state = 'ask_phone';
+    return ctx.reply('Введите ваш номер телефона:');
+  }
+  if (ctx.session.state === 'ask_phone') {
     ctx.session.phone = ctx.message.text;
+    ctx.session.state = null;
+
+    const cart = ctx.session.cart || [];
+    if (cart.length === 0) return ctx.reply('Корзина пуста');
 
     // Формируем заказ
     let orderText = "📦 Новый заказ!\n\n";
-    ctx.session.cart.forEach((item, i) => {
-    orderText += ${i + 1}. ${item.title} × ${item.quantity}\n;
-
-    orderText += \n🏬 Павильон: ${ctx.session.pavilion};
-    orderText += \n📞 Телефон: ${ctx.session.phone};
+    cart.forEach((item, i) => {
+      orderText += ${i + 1}. ${item.title} × ${item.quantity}\n;
+    });
+    orderText += \n🏪 Павильон: ${ctx.session.pavilion}\n📞 Телефон: ${ctx.session.phone};
 
     // Отправляем админу
-    await bot.telegram.sendMessage(ADMIN_ID, orderText);
+    bot.telegram.sendMessage(process.env.ADMIN_ID, orderText);
 
-    // Подтверждение клиенту
-    await ctx.reply('✅ Ваш заказ принят! Ожидайте звонка.');
-
-    // Сброс сессии
-    ctx.session = null;
+    // Подтверждение пользователю
+    ctx.session.cart = [];
+    return ctx.reply('✅ Ваш заказ принят! Ожидайте звонка.');
   }
+  return next();
 });
 
-// Запуск
+// Запуск Express сервера для вебхука
+const app = express();
+app.use(express.json());
+
+app.post(`/bot${process.env.BOT_TOKEN}`, (req, res) => {
+  bot.handleUpdate(req.body);
+  res.sendStatus(200);
+});
+
+app.get('/', (req, res) => {
+  res.send('Бот работает!');
+});
+
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
   console.log(`🌐 Server running on port ${PORT}`);
-  bot.launch();
-});
 
-// Корректное завершение
-process.once('SIGINT', () => bot.stop('SIGINT'));
-process.once('SIGTERM', () => bot.stop('SIGTERM'));
+  // Устанавливаем webhook
+  await bot.telegram.setWebhook(`${process.env.RENDER_EXTERNAL_URL}/bot${process.env.BOT_TOKEN}`);
+});
