@@ -1,1 +1,41 @@
-<!DOCTYPE html><html><head><title>Food Bot</title></head><body>Mini App</body></html>
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Меню</title>
+  <link rel="stylesheet" href="style.css" />
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <h1>Меню</h1>
+    <div class="cart-btn" id="openCartBtn">
+      🧺 <span id="cartCount">0</span>
+    </div>
+  </header>
+
+  <main>
+    <div id="status" class="status"></div>
+    <div id="menu" class="grid"></div>
+  </main>
+
+  <div id="cartDrawer" class="drawer">
+    <div class="drawer__header">
+      <h2>Корзина</h2>
+      <button id="closeCartBtn" class="icon-btn" aria-label="Закрыть">✖</button>
+    </div>
+    <div id="cartItems" class="cart-items"></div>
+    <div class="drawer__footer">
+      <div class="total">
+        Итого: <span id="cartTotal">0 ₽</span>
+      </div>
+      <button id="checkoutBtn" class="primary">Заказать</button>
+    </div>
+  </div>
+
+  <div id="drawerBackdrop" class="backdrop"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
