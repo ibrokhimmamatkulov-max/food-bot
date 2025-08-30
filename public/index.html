@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Food MiniApp</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <link rel="stylesheet" href="/style.css"/>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Меню</h1>
+    <div id="menu" class="menu"></div>
+
+    <h2>Корзина</h2>
+    <div id="cart" class="cart"></div>
+    <div class="total">
+      Итого: <span id="total">0</span> ₽
+    </div>
+    <button id="orderBtn">Заказать</button>
+  </div>
+
+  <script>
+    window.MENU = [{"id": 1, "title": "Пицца Маргарита", "price": 350}, {"id": 2, "title": "Пицца Пепперони", "price": 420}, {"id": 3, "title": "Суши Калифорния", "price": 300}, {"id": 4, "title": "Ролл Филадельфия", "price": 380}, {"id": 5, "title": "Бургер Классический", "price": 290}, {"id": 6, "title": "Картофель Фри", "price": 120}, {"id": 7, "title": "Цезарь салат", "price": 260}, {"id": 8, "title": "Шаурма куриная", "price": 230}, {"id": 9, "title": "Лимонад", "price": 90}, {"id": 10, "title": "Чизкейк", "price": 210}];
+  </script>
+  <script src="/app.js"></script>
+</body>
+</html>
