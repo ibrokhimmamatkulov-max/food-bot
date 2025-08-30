@@ -69,6 +69,7 @@ bot.on('text', async (ctx) => {
     let orderText = "📦 Новый заказ!\n\n";
     ctx.session.cart.forEach((item, i) => {
     orderText += ${i + 1}. ${item.title} × ${item.quantity}\n;
+
     orderText += \n🏬 Павильон: ${ctx.session.pavilion};
     orderText += \n📞 Телефон: ${ctx.session.phone};
 
