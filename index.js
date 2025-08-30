@@ -1,152 +1,157 @@
 require('dotenv').config();
-const { Telegraf, session } = require('telegraf');
+const { Telegraf, Markup, session } = require('telegraf');
 const express = require('express');
 
-// === CONFIG ===
-const BOT_TOKEN = process.env.BOT_TOKEN || "";
-const ADMIN_ID = Number(process.env.ADMIN_ID || 5568760903);
-const WEBAPP_URL = process.env.WEBAPP_URL || "https://food-bot-miniapp.onrender.com";
+// ====== ENV ======
+const BOT_TOKEN = process.env.BOT_TOKEN || '';
+const ADMIN_ID = process.env.ADMIN_ID || '';
+const MINIAPP_URL = process.env.MINIAPP_URL || 'https://food-bot-miniapp.onrender.com';
 const PORT = process.env.PORT || 3000;
 
 if (!BOT_TOKEN) {
-  console.error("❌ BOT_TOKEN is not set. Add it in Render -> Environment.");
+  console.error('❌ BOT_TOKEN не задан. Установите переменную окружения BOT_TOKEN.');
   process.exit(1);
 }
 
 const bot = new Telegraf(BOT_TOKEN);
 
-// --- simple in-memory session ---
-bot.use(session({
-  defaultSession: () => ({
-    step: null,
-    orderDraft: null
-  })
-}));
+// ====== STATE (session) ======
+bot.use(session());
 
-// Set default Menu Button (the one near the input field)
-async function setDefaultMenuButton() {
-  try {
-    await bot.telegram.setChatMenuButton({
-      menu_button: {
-        type: 'web_app',
-        text: 'Menu',
-        web_app: { url: WEBAPP_URL }
-      }
-    });
-    console.log("✅ Default Menu Button set to:", WEBAPP_URL);
-  } catch (e) {
-    console.error("⚠️ Failed to set chat menu button:", e.message);
-  }
+function ensureSession(ctx) {
+  if (!ctx.session) ctx.session = {};
+  if (!ctx.session.order) ctx.session.order = { items: [], total: 0, step: null, pavilion: null, phone: null };
 }
 
-// /start handler (also shows an inline button inside chat)
-bot.start(async (ctx) => {
-  await setDefaultMenuButton();
-  await ctx.reply(
-    'Добро пожаловать! Нажмите кнопку ниже, чтобы открыть меню.',
-    {
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: 'Открыть меню', web_app: { url: WEBAPP_URL } }]
-        ]
-      }
+// ====== Keyboards ======
+const replyKbWithWebApp = () =>
+  Markup.keyboard([Markup.button.webApp('🍽 Меню', MINIAPP_URL)]).resize();
+
+const inlineMenuKb = () =>
+  Markup.inlineKeyboard([
+    [Markup.button.webApp('🍽 Открыть меню', MINIAPP_URL)],
+    [Markup.button.webApp('🛒 Корзина', `${MINIAPP_URL}?cart=1`)],
+  ]);
+
+// ====== Helpers ======
+function formatOrder(order, from) {
+  const lines = [];
+  lines.push(`🔔 <b>Новый заказ</b>`);
+  if (from) {
+    lines.push(`👤 Пользователь: <a href="tg://user?id=${from.id}">${from.first_name || ''} ${from.last_name || ''}</a> (@${from.username || '—'})`);
+  }
+  if (order.items?.length) {
+    lines.push(`\n<b>Состав:</b>`);
+    for (const it of order.items) {
+      lines.push(`• ${it.title} × ${it.qty} = ${Number(it.price) * Number(it.qty)} сум`);
     }
-  );
+  } else {
+    lines.push(`\n(Пустой заказ — данные из мини‑приложения не получены)`);
+  }
+  lines.push(`\n🏬 Павильон: ${order.pavilion || '—'}`);
+  lines.push(`📞 Телефон: ${order.phone || '—'}`);
+  lines.push(`\n💰 Итого: ${order.total || 0} сум`);
+  return lines.join('\n');
+}
+
+// ====== Bot Handlers ======
+bot.start(async (ctx) => {
+  ensureSession(ctx);
+  try {
+    await ctx.reply(
+      '👋 Привет! Нажми кнопку ниже, чтобы открыть меню. После оформления заказа я спрошу номер павильона и телефон.',
+      { ...replyKbWithWebApp() }
+    );
+    await ctx.reply('Или используй кнопки ниже:', inlineMenuKb());
+  } catch (e) {
+    console.error('start err:', e);
+  }
 });
 
-// Handle data sent from the WebApp (cart submit)
+bot.command('menu', async (ctx) => {
+  try {
+    await ctx.reply('Открыть меню или корзину:', inlineMenuKb());
+  } catch (e) {
+    console.error('menu err:', e);
+  }
+});
+
+// Получение данных из мини‑приложения (tg.WebApp.sendData)
 bot.on('message', async (ctx, next) => {
+  ensureSession(ctx);
   const msg = ctx.message;
   if (msg && msg.web_app_data && msg.web_app_data.data) {
     try {
       const data = JSON.parse(msg.web_app_data.data);
-      // expected: { items: [...], total: number }
-      ctx.session.orderDraft = {
-        items: Array.isArray(data.items) ? data.items : [],
-        total: Number(data.total || 0)
-      };
-      ctx.session.step = 'pavilion';
-      await ctx.reply('Укажите номер павильона:');
+      // ожидаем формат { items: [{id,title,price,qty}], total: number }
+      ctx.session.order.items = Array.isArray(data.items) ? data.items : [];
+      ctx.session.order.total = Number(data.total) || 0;
+      ctx.session.order.step = 'ask_pavilion';
+      await ctx.reply('🧾 Заказ получен. Укажите, пожалуйста, номер павильона:');
       return;
     } catch (e) {
-      console.error("Parse web_app_data error:", e);
-      await ctx.reply('Не удалось обработать заказ, попробуйте ещё раз из меню.');
+      console.error('web_app_data parse error:', e);
+      await ctx.reply('Не удалось обработать данные из мини‑приложения. Попробуйте ещё раз.');
       return;
     }
   }
   return next();
 });
 
-// Text flow for pavilion -> phone -> send to admin
+// Последовательность вопросов
 bot.on('text', async (ctx, next) => {
-  const state = ctx.session;
+  ensureSession(ctx);
+  const step = ctx.session.order.step;
   const text = (ctx.message.text || '').trim();
 
-  if (state.step === 'pavilion') {
-    // save pavilion, ask phone
-    state.orderDraft = state.orderDraft || { items: [], total: 0 };
-    state.orderDraft.pavilion = text;
-    state.step = 'phone';
-    await ctx.reply('Введите номер телефона:');
+  if (step === 'ask_pavilion') {
+    ctx.session.order.pavilion = text;
+    ctx.session.order.step = 'ask_phone';
+    await ctx.reply('📞 Укажите номер телефона для связи (например, +99890...):');
     return;
   }
 
-  if (state.step === 'phone') {
-    state.orderDraft.phone = text;
-    // send order to admin
-    const order = state.orderDraft;
-    const itemsText = order.items.map(it => `• ${it.title} x${it.qty} — ${it.price}₽`).join('\n') || '—';
-    const summary =
-`🧾 Новый заказ
-От: @${ctx.from.username || '-'} (id ${ctx.from.id})
-Павильон: ${order.pavilion || '-'}
-Телефон: ${order.phone || '-'}
+  if (step === 'ask_phone') {
+    ctx.session.order.phone = text;
+    ctx.session.order.step = null; // конец
+    const orderText = formatOrder(ctx.session.order, ctx.from);
 
-Позиции:
-${itemsText}
-
-Итого: ${order.total || 0}₽`;
-
-    try {
-      await ctx.telegram.sendMessage(ADMIN_ID, summary);
-    } catch (e) {
-      console.error("Failed to notify admin:", e.message);
+    // Отправляем админу
+    if (ADMIN_ID) {
+      try {
+        await ctx.telegram.sendMessage(ADMIN_ID, orderText, { parse_mode: 'HTML', disable_web_page_preview: true });
+      } catch (e) {
+        console.error('send to admin err:', e);
+      }
     }
-
-    await ctx.reply('Спасибо! Заказ отправлен администратору ✅');
-    // reset session
-    state.step = null;
-    state.orderDraft = null;
+    await ctx.reply('✅ Спасибо! Ваш заказ отправлен. Мы скоро свяжемся с вами.');
     return;
   }
 
   return next();
 });
 
-// Fallback for other messages
-bot.hears(/меню|menu|start/i, async (ctx) => {
-  await ctx.reply('Откройте меню по кнопке ниже или в кнопке рядом с полем ввода.', {
-    reply_markup: {
-      inline_keyboard: [
-        [{ text: 'Открыть меню', web_app: { url: WEBAPP_URL } }]
-      ]
-    }
-  });
+// Ответ на любые callback (если появятся)
+bot.on('callback_query', async (ctx) => {
+  try {
+    await ctx.answerCbQuery();
+  } catch {}
 });
 
-// --- Mini health server so Render has a process and a health endpoint ---
+// Запуск бота
+(async () => {
+  await bot.launch();
+  console.log('🤖 Бот запущен (long polling). Если видите ошибку 409 — остановите локальный экземпляр бота.');
+})();
+
+// ====== Simple HTTP server for Render health checks ======
 const app = express();
-app.get('/healthz', (req, res) => res.send('ok'));
-app.listen(PORT, () => console.log(`Server started on port ${PORT}`));
-
-bot.launch().then(async () => {
-  await setDefaultMenuButton();
-  console.log('🤖 Бот запущен. WebApp URL:', WEBAPP_URL);
-}).catch((e) => {
-  console.error('Bot launch error:', e);
-  process.exit(1);
+app.get('/', (req, res) => {
+  res.send('Food Bot is running. Откройте меню в Telegram.');
 });
+app.get('/healthz', (req, res) => res.send('ok'));
+app.listen(PORT, () => console.log(`🌐 HTTP server on :${PORT}`));
 
-// Enable graceful stop
+// Graceful stop
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
